@@ -38,20 +38,21 @@ LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
 
 // Pin definitions
 #define BUTTON_PIN 12
-#define MOTOR_PWM 7
+#define MOTOR_PWM 6
 #define RPM_POT A0
 #define TIME_POT A1
-#define HALL_SENSOR_PIN 3  // Hall effect sensor pin
+#define HALL_SENSOR_PIN 7  // Hall effect sensor pin
 
 // RPM range
 #define RPM_MIN 100
 #define RPM_MAX 3500
-#define RPM_STEP 100
 
 // Time range
-#define T_MIN 30000    // 30 sec
-#define T_MAX 300000   // 5 min
-#define TIME_STEP 30000 // 30 sec
+#define T_MIN 5000    // 5 sec
+#define T_MAX 1800000 // 3 min
+
+// RPM averaging window
+#define RPM_AVG_WINDOW 1  // Time window (in milliseconds)
 
 // System states
 enum State { PAUSED, ACTIVE };
@@ -59,20 +60,22 @@ volatile State systemState = PAUSED;
 
 // PID variables
 double setRPM, currentRPM, outputPWM;
-double Kp = 2.0, Ki = 5.0, Kd = 1.0;
+double Kp = 0.8, Ki = 1.5, Kd = 5;  // Tuned PID constants
 PID motorPID(&currentRPM, &outputPWM, &setRPM, Kp, Ki, Kd, DIRECT);
 
 // Timing and control variables
 unsigned long startTime, duration;
-volatile unsigned long pulseCount = 0;
-unsigned long lastRPMTime = 0;
-bool lastButtonState = HIGH;
-bool currentButtonState;
+volatile unsigned long totalPulseCount = 0;
+unsigned long timeBufferStart = 0;
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50; // 50ms debounce delay
 
+bool lastButtonState = HIGH;
+bool currentButtonState;
+
+// Interrupt handler for counting pulses
 void countPulse() {
-    pulseCount++;
+    totalPulseCount++;
 }
 
 void setup() {
@@ -86,6 +89,8 @@ void setup() {
     lcd.backlight();
     motorPID.SetMode(AUTOMATIC);
     motorPID.SetOutputLimits(0, 255);
+
+    Serial.begin(9600);
 }
 
 void loop() {
@@ -105,13 +110,11 @@ void loop() {
 
     if (systemState == PAUSED) {
         // Read settings
-        int rawRPM = map(analogRead(RPM_POT), 1023, 0, RPM_MIN, RPM_MAX); 
-        setRPM = round(rawRPM / RPM_STEP) * RPM_STEP; // Round to nearest 100 RPM
-
-        int rawTime = map(analogRead(TIME_POT), 1023, 0, T_MIN, T_MAX);
-        duration = round(rawTime / TIME_STEP) * TIME_STEP; // Round to nearest 30 sec
+        setRPM = map(analogRead(RPM_POT), 1023, 0, RPM_MIN, RPM_MAX); // RPM range
+        duration = map(analogRead(TIME_POT), 1023, 0, T_MIN, T_MAX); // Time range
+        analogWrite(MOTOR_PWM, 0);
     } else {
-        // Read current RPM
+        // Read current RPM with a time-based averaging window
         currentRPM = readRPM();
         
         // PID control
@@ -129,28 +132,30 @@ void loop() {
     lcd.setCursor(0, 0);
     lcd.print(systemState == ACTIVE ? "ACTIVE        " : "PAUSED        ");
     lcd.setCursor(0, 1);
-    lcd.print(systemState == ACTIVE ? ("cur RPM: " + String(setRPM) + " ") : ("set RPM: " + String(setRPM) + " "));
+    lcd.print(systemState == ACTIVE ? ("cur RPM: " + String(currentRPM) + " ") : ("set RPM: " + String(setRPM) + " "));
     lcd.setCursor(0, 2);
     if (systemState == ACTIVE) {
-        unsigned long remainingTime = duration - (millis() - startTime);
-        int minutes = remainingTime / 60000;
-        int seconds = (remainingTime % 60000) / 1000;
-        lcd.print("rem time: " + String(minutes) + ":" + (seconds < 10 ? "0" : "") + String(seconds) + "  ");
+        unsigned long remainingTime = (duration - (millis() - startTime)) / 1000;
+        lcd.print("rem time: " + String(remainingTime) + "s  ");
     } else {
-        int minutes = duration / 60000;
-        int seconds = (duration % 60000) / 1000;
-        lcd.print("set time: " + String(minutes) + ":" + (seconds < 10 ? "0" : "") + String(seconds) + "  ");
+        lcd.print("set time: " + String(duration / 1000) + "s  ");
     }
 }
 
-// RPM reading function using Hall effect sensor
+// **Improved RPM Calculation with Time Buffering**
 double readRPM() {
     unsigned long currentTime = millis();
-    if (currentTime - lastRPMTime >= 1000) { // Update RPM every second
-        double rotations = pulseCount;
-        currentRPM = (rotations * 60.0); // Convert to RPM
-        pulseCount = 0;
-        lastRPMTime = currentTime;
+    
+    // Check if enough time has passed to compute RPM
+    if (currentTime - timeBufferStart >= RPM_AVG_WINDOW) {
+        double elapsedTime = (currentTime - timeBufferStart) / 1000.0;  // Convert ms to seconds
+        currentRPM = (totalPulseCount / elapsedTime) * 60.0;  // Convert to RPM
+        
+        // Reset buffer
+        totalPulseCount = 0;
+        timeBufferStart = currentTime;
     }
+
+    Serial.println(currentRPM);
     return currentRPM;
 }
