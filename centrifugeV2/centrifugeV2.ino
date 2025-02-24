@@ -52,7 +52,7 @@ LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
 #define T_MAX 1800000 // 3 min
 
 // RPM averaging window
-#define RPM_AVG_WINDOW 1  // Time window (in milliseconds)
+#define RPM_AVG_WINDOW 3  // Time window (in milliseconds)
 
 // System states
 enum State { PAUSED, ACTIVE };
@@ -60,7 +60,7 @@ volatile State systemState = PAUSED;
 
 // PID variables
 double setRPM, currentRPM, outputPWM;
-double Kp = 0.8, Ki = 1.5, Kd = 5;  // Tuned PID constants
+double Kp = 0.8, Ki = 0.5, Kd = 0.5;  // Tuned PID constants
 PID motorPID(&currentRPM, &outputPWM, &setRPM, Kp, Ki, Kd, DIRECT);
 
 // Timing and control variables
