@@ -17,7 +17,7 @@
  * Hardware:
  * - LCD Display (I2C, 16x2)
  * - Hall effect sensor for RPM measurement
- * - NMOS transistor for motor control (PWM on pin 7)
+ * - NMOS transistor for motor control (PWM on pin 6)
  * - Two potentiometers for setting RPM and time
  * - Push button for state toggling (with external pull-up)
  * 
@@ -50,9 +50,6 @@ LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
 // Time range
 #define T_MIN 5000    // 5 sec
 #define T_MAX 1800000 // 3 min
-
-// RPM averaging window
-#define RPM_AVG_WINDOW 3  // Time window (in milliseconds)
 
 // System states
 enum State { PAUSED, ACTIVE };
@@ -96,62 +93,52 @@ void setup() {
 void loop() {
     // Read button state with debounce
     bool reading = digitalRead(BUTTON_PIN);
-    if (reading != lastButtonState) {
-        lastDebounceTime = millis();
-    }
-    if ((millis() - lastDebounceTime) > debounceDelay) {
-        if (reading == LOW && currentButtonState == HIGH) {
-            systemState = (systemState == PAUSED) ? ACTIVE : PAUSED;
-            if (systemState == ACTIVE) startTime = millis();
-        }
-        currentButtonState = reading;
+    if ((millis() - lastDebounceTime) > debounceDelay && reading == LOW && lastButtonState == HIGH) {
+        systemState = (systemState == PAUSED) ? ACTIVE : PAUSED;
+        if (systemState == ACTIVE) startTime = millis();
     }
     lastButtonState = reading;
 
     if (systemState == PAUSED) {
-        // Read settings
-        setRPM = map(analogRead(RPM_POT), 1023, 0, RPM_MIN, RPM_MAX); // RPM range
-        duration = map(analogRead(TIME_POT), 1023, 0, T_MIN, T_MAX); // Time range
+        // Read user settings
+        setRPM = map(analogRead(RPM_POT), 0, 1023, RPM_MIN, RPM_MAX);
+        duration = map(analogRead(TIME_POT), 0, 1023, T_MIN, T_MAX);
         analogWrite(MOTOR_PWM, 0);
     } else {
-        // Read current RPM with a time-based averaging window
+        // Read real-time RPM
         currentRPM = readRPM();
         
-        // PID control
+        // Run PID control
         motorPID.Compute();
         analogWrite(MOTOR_PWM, (int)outputPWM);
 
-        // Stop after time runs out
-        unsigned long elapsedTime = millis() - startTime;
-        if (elapsedTime >= duration) {
+        // Stop after set duration
+        if ((millis() - startTime) >= duration) {
             systemState = PAUSED;
         }
     }
-    
+
     // LCD update
     lcd.setCursor(0, 0);
-    lcd.print(systemState == ACTIVE ? "ACTIVE        " : "PAUSED        ");
+    lcd.print(systemState == ACTIVE ? "ACTIVE " : "PAUSED ");
+
     lcd.setCursor(0, 1);
-    lcd.print(systemState == ACTIVE ? ("cur RPM: " + String(currentRPM) + " ") : ("set RPM: " + String(setRPM) + " "));
+    lcd.print("RPM: " + String(systemState == ACTIVE ? currentRPM : setRPM) + "   ");
+
     lcd.setCursor(0, 2);
-    if (systemState == ACTIVE) {
-        unsigned long remainingTime = (duration - (millis() - startTime)) / 1000;
-        lcd.print("rem time: " + String(remainingTime) + "s  ");
-    } else {
-        lcd.print("set time: " + String(duration / 1000) + "s  ");
-    }
+    lcd.print(systemState == ACTIVE ? ("Time Left: " + String((duration - (millis() - startTime)) / 1000) + "s  ")
+                                    : ("Set Time: " + String(duration / 1000) + "s  "));
 }
 
-// **Improved RPM Calculation with Time Buffering**
+// **Real-time RPM Calculation (No Averaging)**
 double readRPM() {
     unsigned long currentTime = millis();
     
-    // Check if enough time has passed to compute RPM
-    if (currentTime - timeBufferStart >= RPM_AVG_WINDOW) {
-        double elapsedTime = (currentTime - timeBufferStart) / 1000.0;  // Convert ms to seconds
+    if (currentTime - timeBufferStart >= 100) { // Check every 100ms
+        double elapsedTime = (currentTime - timeBufferStart) / 1000.0;  // Convert ms to sec
         currentRPM = (totalPulseCount / elapsedTime) * 60.0;  // Convert to RPM
-        
-        // Reset buffer
+
+        // Reset pulse count and timer
         totalPulseCount = 0;
         timeBufferStart = currentTime;
     }
