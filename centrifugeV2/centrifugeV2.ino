@@ -1,29 +1,3 @@
-/*
- * Centrifuge Control System with RPM Smoothing
- * 
- * Author: Ege Turan  
- * Stanford University, Winter 2025  
- * BIOE123 Bioengineering Systems Laboratory  
- * 
- * Description:
- * This Arduino program controls a centrifuge system with two states: PAUSED and ACTIVE.
- * - Uses an **Exponential Moving Average (EMA)** to smooth RPM readings.
- * - PID controller maintains motor speed based on the smoothed RPM.
- * - Hall effect sensor measures RPM from two magnets on the rotor.
- * - Push button toggles system state, and an I2C LCD displays RPM & time.
- * 
- * Hardware:
- * - LCD Display (I2C, 16x2)
- * - Hall effect sensor for RPM measurement
- * - NMOS transistor for motor control (PWM on pin 6)
- * - Two potentiometers for setting RPM and time
- * - Push button for state toggling (with external pull-up)
- * 
- * Notes:
- * - Uses **PID_v2** for precise control.
- * - Implements **non-blocking loop** for real-time updates.
- */
-
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <PID_v2.h>
@@ -40,6 +14,7 @@ LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
 #define RPM_POT A0
 #define TIME_POT A1
 #define HALL_SENSOR_PIN 7  // Hall effect sensor pin
+#define BUZZER_PIN 8
 
 // RPM range
 #define RPM_MIN 100
@@ -78,6 +53,7 @@ void setup() {
     pinMode(BUTTON_PIN, INPUT);
     pinMode(MOTOR_PWM, OUTPUT);
     pinMode(HALL_SENSOR_PIN, INPUT);
+    pinMode(BUZZER_PIN, OUTPUT);
     
     attachInterrupt(digitalPinToInterrupt(HALL_SENSOR_PIN), countPulse, RISING);
     
@@ -95,7 +71,13 @@ void loop() {
     if ((millis() - lastDebounceTime) > debounceDelay && reading == LOW && lastButtonState == HIGH) {
         systemState = (systemState == PAUSED) ? ACTIVE : PAUSED;
         lastDebounceTime = millis(); // Update debounce timer
-        if (systemState == ACTIVE) startTime = millis();
+        
+        if (systemState == ACTIVE) {
+            startTime = millis();
+            playStartTone();  // Play buzzer sound when starting
+        } else {
+            playStopTone();   // Play buzzer sound when stopping
+        }
     }
     lastButtonState = reading;
 
@@ -116,6 +98,7 @@ void loop() {
         // Stop after set duration
         if ((millis() - startTime) >= duration) {
             systemState = PAUSED;
+            playStopTone();  // Play buzzer sound when stopping due to timeout
         }
     }
 
@@ -146,4 +129,17 @@ double readRPM() {
 
     Serial.println(currentRPM);
     return currentRPM;
+}
+
+// **Buzzer Sounds**
+void playStartTone() {
+    tone(BUZZER_PIN, 1000, 200); // 1kHz for 200ms
+    delay(250);
+    tone(BUZZER_PIN, 1500, 200); // 1.5kHz for 200ms
+}
+
+void playStopTone() {
+    tone(BUZZER_PIN, 500, 200); // 500Hz for 200ms
+    delay(250);
+    tone(BUZZER_PIN, 300, 200); // 300Hz for 200ms
 }
