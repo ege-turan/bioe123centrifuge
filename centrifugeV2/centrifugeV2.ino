@@ -18,11 +18,11 @@ LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
 
 // RPM range
 #define RPM_MIN 100
-#define RPM_MAX 3500
+#define RPM_MAX 3800 // Max stable recorded is 3720
 
 // Time range
 #define T_MIN 5000    // 5 sec
-#define T_MAX 1800000 // 30 min
+#define T_MAX 180000 // 3 min
 
 // System states
 enum State { PAUSED, ACTIVE };
@@ -32,7 +32,7 @@ volatile State systemState = PAUSED;
 double setRPM, currentRPM, outputPWM;
 double smoothedRPM = 0;  // Smoothed RPM value
 const double alpha = 0.2; // Smoothing factor (higher = less smoothing)
-double Kp = 0.8, Ki = 0.5, Kd = 0.5;
+double Kp = 1.2, Ki = 1.5, Kd = 0.03;
 PID motorPID(&smoothedRPM, &outputPWM, &setRPM, Kp, Ki, Kd, DIRECT);
 
 // Timing and control variables
@@ -120,7 +120,7 @@ double readRPM() {
     
     if (currentTime - lastRPMUpdate >= 100) { // Check every 100ms
         double elapsedTime = (currentTime - lastRPMUpdate) / 1000.0;  // Convert ms to sec
-        currentRPM = (totalPulseCount / elapsedTime) * 30.0;  // Adjusted for 2 magnets
+        currentRPM = (totalPulseCount / elapsedTime) * 60.0;
 
         // Reset pulse count and timer
         totalPulseCount = 0;
