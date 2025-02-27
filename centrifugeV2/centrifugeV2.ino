@@ -1,3 +1,36 @@
+/*
+ * Centrifuge Control System
+ * Centrifuge Control System with RPM Smoothing
+ * 
+ * Author: Ege Turan  
+ * Stanford University, Winter 2025  
+ * BIOE123 Bioengineering Systems Laboratory  
+ * 
+ * Description:
+ * This Arduino program controls a centrifuge system with two states: PAUSED and ACTIVE.
+ * - In the PAUSED state, the user can set the desired RPM and duration using two potentiometers.
+ * - In the ACTIVE state, the system uses a PID controller to reach and maintain the target RPM.
+ * - A Hall effect sensor measures the current RPM by detecting pulses from two magnets on the rotor.
+ * - The system runs for the set duration before stopping automatically.
+ * - A button toggles between PAUSED and ACTIVE states, with a debounce mechanism to prevent false triggers.
+ * - The system status, set RPM, and either the set or remaining time are displayed on a 16x2 I2C LCD.
+ * - Uses an **Exponential Moving Average (EMA)** to smooth RPM readings.
+ * - PID controller maintains motor speed based on the smoothed RPM.
+ * - Hall effect sensor measures RPM from two magnets on the rotor.
+ * - Push button toggles system state, and an I2C LCD displays RPM & time.
+ * 
+ * Hardware:
+ * - LCD Display (I2C, 16x2)
+@@ -22,8 +20,8 @@
+ * - Push button for state toggling (with external pull-up)
+ * 
+ * Notes:
+ * - Uses the PID_v2 library for precise motor speed control.
+ * - Implements a non-blocking loop for real-time updates.
+ * - Uses **PID_v2** for precise control.
+ * - Implements **non-blocking loop** for real-time updates.
+ */
+
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <PID_v2.h>
@@ -22,7 +55,7 @@ LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
 
 // Time range
 #define T_MIN 5000    // 5 sec
-#define T_MAX 180000 // 3 min
+#define T_MAX 600000  // 10 min
 
 // System states
 enum State { PAUSED, ACTIVE };
@@ -31,8 +64,8 @@ volatile State systemState = PAUSED;
 // PID variables
 double setRPM, currentRPM, outputPWM;
 double smoothedRPM = 0;  // Smoothed RPM value
-const double alpha = 0.2; // Smoothing factor (higher = less smoothing)
-double Kp = 1.2, Ki = 1.5, Kd = 0.03;
+const double alpha = 0.2; // Smoothing factor
+double Kp = 0.7, Ki = 1.5, Kd = 0.03;
 PID motorPID(&smoothedRPM, &outputPWM, &setRPM, Kp, Ki, Kd, DIRECT);
 
 // Timing and control variables
@@ -43,6 +76,12 @@ unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50; // 50ms debounce delay
 
 bool lastButtonState = HIGH;
+
+// Running average buffer for RPM
+#define RPM_BUFFER_SIZE 10
+double rpmBuffer[RPM_BUFFER_SIZE] = {0};  
+int rpmIndex = 0;
+double rpmSum = 0; 
 
 // Interrupt handler for counting pulses
 void countPulse() {
@@ -70,19 +109,18 @@ void loop() {
     bool reading = digitalRead(BUTTON_PIN);
     if ((millis() - lastDebounceTime) > debounceDelay && reading == LOW && lastButtonState == HIGH) {
         systemState = (systemState == PAUSED) ? ACTIVE : PAUSED;
-        lastDebounceTime = millis(); // Update debounce timer
+        lastDebounceTime = millis(); 
         
         if (systemState == ACTIVE) {
             startTime = millis();
-            playStartTone();  // Play buzzer sound when starting
+            playStartTone();
         } else {
-            playStopTone();   // Play buzzer sound when stopping
+            playStopTone();
         }
     }
     lastButtonState = reading;
 
     if (systemState == PAUSED) {
-        // Read user settings
         setRPM = map(analogRead(RPM_POT), 0, 1023, RPM_MIN, RPM_MAX);
         duration = map(analogRead(TIME_POT), 0, 1023, T_MIN, T_MAX);
         analogWrite(MOTOR_PWM, 0);
@@ -98,11 +136,11 @@ void loop() {
         // Stop after set duration
         if ((millis() - startTime) >= duration) {
             systemState = PAUSED;
-            playStopTone();  // Play buzzer sound when stopping due to timeout
+            playStopTone();
         }
     }
 
-    // LCD update (Fixed indexing to avoid overflow)
+    // LCD update
     lcd.setCursor(0, 0);
     lcd.print(systemState == ACTIVE ? "ACTIVE " : "PAUSED ");
 
@@ -114,32 +152,46 @@ void loop() {
                                     : ("Set Time: " + String(duration / 1000) + "s  "));
 }
 
-// **Real-time RPM Calculation with Smoothing**
+// **Real-time RPM Calculation with Running Average**
 double readRPM() {
     unsigned long currentTime = millis();
-    
-    if (currentTime - lastRPMUpdate >= 100) { // Check every 100ms
-        double elapsedTime = (currentTime - lastRPMUpdate) / 1000.0;  // Convert ms to sec
+
+    if (currentTime - lastRPMUpdate >= 30) { // Update every 30ms
+        double elapsedTime = (currentTime - lastRPMUpdate) / 1000.0;  
         currentRPM = (totalPulseCount / elapsedTime) * 60.0;
+
+        // Update running average buffer
+        rpmSum -= rpmBuffer[rpmIndex];  // Remove oldest value
+        rpmBuffer[rpmIndex] = currentRPM;  // Store new value
+        rpmSum += currentRPM;  // Add new value
+        rpmIndex = (rpmIndex + 1) % RPM_BUFFER_SIZE;  // Move index in buffer
+
+        // Compute average RPM
+        double avgRPM = rpmSum / RPM_BUFFER_SIZE;
 
         // Reset pulse count and timer
         totalPulseCount = 0;
         lastRPMUpdate = currentTime;
+
+        // Print to Serial Monitor and Serial Plotter
+        Serial.print("Raw RPM: ");
+        Serial.print(currentRPM);
+        Serial.print("\t Averaged RPM: ");
+        Serial.println(avgRPM);
     }
 
-    Serial.println(currentRPM);
     return currentRPM;
 }
 
 // **Buzzer Sounds**
 void playStartTone() {
-    tone(BUZZER_PIN, 1000, 200); // 1kHz for 200ms
+    tone(BUZZER_PIN, 1000, 200); 
     delay(250);
-    tone(BUZZER_PIN, 1500, 200); // 1.5kHz for 200ms
+    tone(BUZZER_PIN, 1500, 200);
 }
 
 void playStopTone() {
-    tone(BUZZER_PIN, 500, 200); // 500Hz for 200ms
+    tone(BUZZER_PIN, 500, 200); 
     delay(250);
-    tone(BUZZER_PIN, 300, 200); // 300Hz for 200ms
+    tone(BUZZER_PIN, 300, 200);
 }
