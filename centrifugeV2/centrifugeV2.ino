@@ -21,14 +21,13 @@
  * 
  * Hardware:
  * - LCD Display (I2C, 16x2)
-@@ -22,8 +20,8 @@
  * - Push button for state toggling (with external pull-up)
  * 
  * Notes:
  * - Uses the PID_v2 library for precise motor speed control.
  * - Implements a non-blocking loop for real-time updates.
- * - Uses **PID_v2** for precise control.
- * - Implements **non-blocking loop** for real-time updates.
+ * - Uses PID_v2 for precise control.
+ * - Implementsnon-blocking loop for real-time updates.
  */
 
 #include <Wire.h>
