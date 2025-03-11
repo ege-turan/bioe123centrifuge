@@ -3,8 +3,6 @@
 #include <PID_v2.h>
 
 // OLED setup for SPI
-#define OLED_CLK 13  // SCK
-#define OLED_MOSI 11 // MOSI
 #define OLED_CS 10   // Chip Select
 #define OLED_DC 9    // Data/Command
 #define OLED_RST 8   // Reset
@@ -12,12 +10,13 @@
 U8X8_SSD1309_128X64_NONAME2_4W_HW_SPI u8x8(OLED_CS, OLED_DC, OLED_RST);
 
 // Pin definitions
-#define BUTTON_PIN 5
+#define BUTTON_PIN 12
 #define MOTOR_PWM 6
 #define RPM_POT A0
 #define TIME_POT A1
 #define HALL_SENSOR_PIN 7  // Hall effect sensor pin
-#define BUZZER_PIN 12
+#define BUZZER_PIN 11
+#define LIMIT_SWITCH_PIN 5
 
 // RPM range
 #define RPM_MIN 100
@@ -56,6 +55,7 @@ void setup() {
     pinMode(MOTOR_PWM, OUTPUT);
     pinMode(HALL_SENSOR_PIN, INPUT);
     pinMode(BUZZER_PIN, OUTPUT);
+    pinMode(LIMIT_SWITCH_PIN, INPUT);
     
     attachInterrupt(digitalPinToInterrupt(HALL_SENSOR_PIN), countPulse, RISING);
     
@@ -71,6 +71,7 @@ void setup() {
 }
 
 void loop() {
+    // Handle button press to toggle state
     bool reading = digitalRead(BUTTON_PIN);
     if ((millis() - lastDebounceTime) > debounceDelay && reading == LOW && lastButtonState == HIGH) {
         systemState = (systemState == PAUSED) ? ACTIVE : PAUSED;
@@ -85,17 +86,26 @@ void loop() {
     }
     lastButtonState = reading;
 
+    // Handle limit switch — Pause if triggered during ACTIVE state
+    if (systemState == ACTIVE && digitalRead(LIMIT_SWITCH_PIN) == LOW) {
+        systemState = PAUSED;
+        playStopTone();
+    }
+
     if (systemState == PAUSED) {
+        // Read and map target RPM and time
         setRPM = map(analogRead(RPM_POT), 0, 1023, RPM_MIN, RPM_MAX);
         duration = map(analogRead(TIME_POT), 0, 1023, T_MIN, T_MAX);
         analogWrite(MOTOR_PWM, 0);
     } else {
+        // Read current RPM and apply PID control
         currentRPM = readRPM();
         smoothedRPM = (alpha * currentRPM) + ((1 - alpha) * smoothedRPM);
 
         motorPID.Compute();
         analogWrite(MOTOR_PWM, (int)outputPWM);
 
+        // Stop after the set time
         if ((millis() - startTime) >= duration) {
             systemState = PAUSED;
             playStopTone();
@@ -106,7 +116,6 @@ void loop() {
 }
 
 void updateDisplay() {
-    //u8x8.clear();
     u8x8.drawString(0, 0, systemState == ACTIVE ? "ACTIVE" : "PAUSED");
     u8x8.drawString(0, 2, ("RPM: " + String(systemState == ACTIVE ? smoothedRPM : setRPM)).c_str());
     u8x8.drawString(0, 4, systemState == ACTIVE ? ("Time Left: " + String((duration - (millis() - startTime)) / 1000) + "s").c_str() 
